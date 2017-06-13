@@ -58,7 +58,6 @@ function uc_platron_uc_payment_method() {
     'review' => t('Platron'),
     'desc' => t('Redirect users to submit payments through Platron.'),
     'callback' => 'uc_payment_method_platron',
-    'redirect' => 'uc_platron_form',
     'weight' => 1,
     'checkout' => FALSE,
     'no_gateway' => TRUE,
@@ -77,6 +76,8 @@ function uc_platron_uc_payment_method() {
  */
 function uc_payment_method_platron($op, &$order) {
   switch ($op) {
+    case 'order-submit':
+      return uc_platron_make_payment($order);
     case 'settings':
       $form['uc_platron_test_mode'] = array(
         '#type'          => 'checkbox',
@@ -101,6 +102,31 @@ function uc_payment_method_platron($op, &$order) {
         '#title'         => t('PG timeout'),
         '#default_value' => variable_get('uc_platron_pg_timeout', 60*60*24*3),
         '#description'   => t('In seconds'),
+      );
+
+      $form['ofd'] = array(
+        '#type' => 'fieldset',
+        '#collapsible' => TRUE,
+        '#collapsed' => TRUE,
+        '#title' => t('OFD Receipt'),
+      );
+      $form['ofd']['uc_platron_ofd_send_receipt'] = array(
+        '#type' => 'checkbox',
+        '#title' => t('Send receipt to ofd'),
+        '#default_value' => variable_get('uc_platron_ofd_send_receipt', 0),
+      );
+      $form['ofd']['uc_platron_ofd_tax'] = array(
+        '#type' => 'select',
+        '#title' => t('Tax type for ofd receipt items'),
+        '#default_value' => variable_get('uc_platron_ofd_tax', '18'),
+        '#options' => array(
+          'none' => 'none',
+          '0' => '0%',
+          '10' => '10%',
+          '18' => '18%',
+          '110' => '10/110',
+          '118' => '18/118',
+        ),
       );
 
       $form['statuses'] = array(
@@ -168,10 +194,7 @@ function uc_payment_method_platron($op, &$order) {
  * Module and Helper Functions
  ******************************************************************************/
 
-/**
- * Redirects customer to Platron payment services.
- */
-function uc_platron_form($form, &$form_state) {
+function uc_platron_make_payment($order) {
   $order_id = intval($_SESSION['cart_order']);
   
   $order = uc_order_load($order_id);
@@ -189,7 +212,7 @@ function uc_platron_form($form, &$form_state) {
     'pg_result_url'      => variable_get('uc_platron_url_done', url('uc_platron/done', array('absolute' => TRUE))),
     'pg_success_url'    => variable_get('uc_platron_url_success', url('uc_platron/success', array('absolute' => TRUE))),
     'pg_failure_url'    => variable_get('uc_platron_url_fail', url('uc_platron/cancel', array('absolute' => TRUE))),
-	'pg_user_ip'		=> $_SERVER['REMOTE_ADDR'],
+  //'pg_user_ip'    => $_SERVER['REMOTE_ADDR'],
   
     'pg_merchant_id'    => variable_get('uc_platron_mid', ''),
     'pg_lifetime'      => variable_get('uc_platron_pg_timeout', 60*60*24*3),
@@ -202,7 +225,7 @@ function uc_platron_form($form, &$form_state) {
     'pg_user_phone'      => $phone,
     'pg_user_email'      => $order->primary_email,
     'pg_user_contact_email'  => $order->primary_email,
-	'cms_payment_module'  => 'UBERCART',
+  'cms_payment_module'  => 'UBERCART',
   ];
   
   $params['pg_description'] = "\r\n";
@@ -221,31 +244,119 @@ function uc_platron_form($form, &$form_state) {
   
   // Signature
   module_load_include('class', 'uc_platron', 'PG_Signature');
-  $thisScriptName = 'payment.php';
+  $thisScriptName = 'init_payment.php';
   $params['pg_sig'] = PG_Signature::make($thisScriptName, $params, variable_get('uc_platron_msec', ''));
 
-  foreach ($params as $key=>$value) {
-    $form[$key] = array(
-      '#type'    => 'hidden',
-      '#value'  => $value,
-    );
-  }  
- 
-  $form['#action'] = 'https://www.platron.ru/'. $thisScriptName;
-  $form['submit'] = array(
-    '#name'    => '',
-    '#type'    => 'submit',
-    '#value'  => t('Submit'),
-  );
-  $form['#token'] = FALSE;
-  $form['#pre_render'][] = 'platron_clean_form';
+  $xmlResponse = uc_platron_api_request($params, 'https://www.platron.ru/init_payment.php');
+  if (!$xmlResponse) {
+    return array(array(
+      'pass' => FALSE,
+      'message' => t('Error while processing payment'),
+    ));
+  }
 
-  return $form;
+  if (!PG_signature::checkXML($thisScriptName, $xmlResponse, variable_get('uc_platron_msec', ''))) {
+    $error = 'Platron init_payment response error: Invalid signature';
+    watchdog('uc_platron', '!error', array('!error' => $error), WATCHDOG_ERROR);
+    return array(array(
+      'pass' => FALSE,
+      'message' => t('Error while processing payment'),
+    ));
+  }
+
+  if ($xmlResponse->pg_status == 'error') {
+    $error = 'Platron init_payment response error: ' . $xmlResponse->pg_error_description;
+    watchdog('uc_platron', '!error', array('!error' => $error), WATCHDOG_ERROR);
+    return array(array(
+      'pass' => FALSE,
+      'message' => t('Error while processing payment'),
+    ));
+  }
+
+  if (variable_get('uc_platron_ofd_send_receipt', 0)) {
+    $paymentId = (string) $xmlResponse->pg_payment_id;
+    module_load_include('php', 'uc_platron', 'ofd');
+    $receipt = new OfdReceiptRequest(variable_get('uc_platron_mid', ''), $paymentId);
+    $items = array();
+    foreach($order->products as $product) {
+      $item = new OfdReceiptItem();
+      $item->label = substr($product->title, 0, 128);
+      $item->price = $product->price;
+      $item->quantity = $product->qty;
+      $item->amount = $item->price * $item->quantity;
+      $item->vat = variable_get('uc_platron_ofd_tax', 'none');
+      $items[] = $item;
+    }
+    $receipt->items = $items;
+    $receipt->prepare();
+    $receipt->sign(variable_get('uc_platron_msec', ''));
+
+    $params = array('pg_xml' => $receipt->asXml());
+    $xmlOfdResponse = uc_platron_api_request($params, 'https://www.platron.ru/receipt.php');
+
+    if (!$xmlOfdResponse) {
+      return array(array(
+        'pass' => FALSE,
+        'message' => t('Error while processing payment'),
+      ));
+    }
+
+    if (!PG_signature::checkXML(OfdReceiptRequest::SCRIPT_NAME, $xmlOfdResponse, variable_get('uc_platron_msec', ''))) {
+      $error = 'Platron receipt response error: Invalid signature';
+      watchdog('uc_platron', '!error', array('!error' => $error), WATCHDOG_ERROR);
+      return array(array(
+        'pass' => FALSE,
+        'message' => t('Error while processing payment'),
+      ));
+    }
+
+    if ($xmlOfdResponse->pg_status == 'error') {
+      $error = 'Platron response error: ' . $xmlOfdResponse->pg_error_description;
+      watchdog('uc_platron', '!error', array('!error' => $error), WATCHDOG_ERROR);
+      return array(array(
+        'pass' => FALSE,
+        'message' => t('Error while processing payment'),
+      ));
+    }
+  }
+
+  drupal_goto($xmlResponse->pg_redirect_url);
+
+  /*
+        return array(array(
+        'pass' => FALSE,
+        'message' => t('We were unable to process your credit card.'),
+      ));
+      */
 }
 
-function platron_clean_form($form) {
-  unset($form['form_id']);
-  unset($form['form_build_id']);
-  
-  return $form;
+function uc_platron_api_request($request, $server) {
+  $data = http_build_query($request);
+
+  $ch = curl_init();
+  curl_setopt($ch, CURLOPT_URL, $server);
+  curl_setopt($ch, CURLOPT_VERBOSE, 0);
+  curl_setopt($ch, CURLOPT_POST, 1);
+  curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
+  curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+  curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, 1);
+  curl_setopt($ch, CURLOPT_NOPROGRESS, 1);
+  curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 0);
+  $response = curl_exec($ch);
+  if ($error = curl_error($ch)) {
+    watchdog('uc_platron', '!error', array('!error' => $error), WATCHDOG_ERROR);
+    return null;
+  }
+  curl_close($ch);
+
+  $xmlResponse = null;
+  try {
+    $xmlResponse = new SimpleXMLElement($response);
+  } catch (Exception $e) {
+    $error = "API response error: " . $e->getMessage();
+    watchdog('uc_platron', '!error', array('!error' => $error), WATCHDOG_ERROR);
+    return null;
+  }
+
+  return $xmlResponse;
 }
