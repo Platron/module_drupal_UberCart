@@ -196,7 +196,7 @@ function uc_payment_method_platron($op, &$order) {
 
 function uc_platron_make_payment($order) {
   $order_id = intval($_SESSION['cart_order']);
-  
+
   $order = uc_order_load($order_id);
   if ($order === FALSE || uc_order_status_data($order->order_status, 'state') != 'in_checkout') {
     $_SESSION['cart_order'] = NULL;
@@ -285,6 +285,15 @@ function uc_platron_make_payment($order) {
       $item->quantity = $product->qty;
       $item->amount = $item->price * $item->quantity;
       $item->vat = variable_get('uc_platron_ofd_tax', 'none');
+      $items[] = $item;
+    }
+    if (isset($order->quote['rate']) && $order->quote['rate'] > 0) {
+      $item = new OfdReceiptItem();
+      $item->label = t('Shipping');
+      $item->price = $order->quote['rate'];
+      $item->quantity = 1;
+      $item->amount = $order->quote['rate'];
+      $item->vat = '18';
       $items[] = $item;
     }
     $receipt->items = $items;
