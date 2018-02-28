@@ -281,18 +281,16 @@ function uc_platron_make_payment($order) {
     foreach($order->products as $product) {
       $item = new OfdReceiptItem();
       $item->label = substr($product->title, 0, 128);
-      $item->price = $product->price;
+      $item->price = round($product->price, 2);
       $item->quantity = $product->qty;
-      $item->amount = $item->price * $item->quantity;
       $item->vat = variable_get('uc_platron_ofd_tax', 'none');
       $items[] = $item;
     }
     if (isset($order->quote['rate']) && $order->quote['rate'] > 0) {
       $item = new OfdReceiptItem();
       $item->label = t('Shipping');
-      $item->price = $order->quote['rate'];
+      $item->price = round($order->quote['rate'], 2);
       $item->quantity = 1;
-      $item->amount = $order->quote['rate'];
       $item->vat = variable_get('uc_platron_ofd_tax', 'none') == 'none' ? 'none' : '18';
       $items[] = $item;
     }
