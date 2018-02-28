@@ -212,7 +212,6 @@ function uc_platron_make_payment($order) {
     'pg_result_url'      => variable_get('uc_platron_url_done', url('uc_platron/done', array('absolute' => TRUE))),
     'pg_success_url'    => variable_get('uc_platron_url_success', url('uc_platron/success', array('absolute' => TRUE))),
     'pg_failure_url'    => variable_get('uc_platron_url_fail', url('uc_platron/cancel', array('absolute' => TRUE))),
-  //'pg_user_ip'    => $_SERVER['REMOTE_ADDR'],
   
     'pg_merchant_id'    => variable_get('uc_platron_mid', ''),
     'pg_lifetime'      => variable_get('uc_platron_pg_timeout', 60*60*24*3),
