@@ -118,14 +118,14 @@ function uc_payment_method_platron($op, &$order) {
       $form['ofd']['uc_platron_ofd_tax'] = array(
         '#type' => 'select',
         '#title' => t('Tax type for ofd receipt items'),
-        '#default_value' => variable_get('uc_platron_ofd_tax', '18'),
+        '#default_value' => variable_get('uc_platron_ofd_tax', '20'),
         '#options' => array(
           'none' => 'Не облагается',
           '0' => '0%',
           '10' => '10%',
-          '18' => '18%',
+          '20' => '20%',
           '110' => '10/110',
-          '118' => '18/118',
+          '120' => '20/120',
         ),
       );
 
@@ -290,7 +290,8 @@ function uc_platron_make_payment($order) {
       $item->label = t('Shipping');
       $item->price = round($order->quote['rate'], 2);
       $item->quantity = 1;
-      $item->vat = variable_get('uc_platron_ofd_tax', 'none') == 'none' ? 'none' : '18';
+      $item->vat = variable_get('uc_platron_ofd_tax', 'none') == 'none' ? 'none' : '20';
+      $item->type = 'service';
       $items[] = $item;
     }
     $receipt->items = $items;
